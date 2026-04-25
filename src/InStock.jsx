@@ -289,7 +289,7 @@ const blankContact = { name:"", email:"", phone:"", slack:"" };
 const blankMfr     = { name:"", phone:"", email:"", website:"" };
 const blankMaintenance = { date:"", type:"Repair", description:"", technician:"", cost:"" };
 
-export default function InStock() {
+export default function InStock({ session, organization, onLogout } = {}) {
   const [items,      setItems]      = useState(() => loadLS("instock_items", SEED));
   const [view,       setView]       = useState("list");  // list | detail | scan | logs
   const [toast,      setToast]      = useState(null);
@@ -807,6 +807,28 @@ export default function InStock() {
             Logs {statusLogs.length > 0 && <span style={{marginLeft:4,background:"#e2e8f0",borderRadius:10,padding:"1px 7px",fontSize:11,fontWeight:700,color:"#475569"}}>{statusLogs.length}</span>}
           </button>
           <button style={S.btn()} onClick={()=>setShowRegisterChoice(true)}>+ Register</button>
+          {session && (
+            <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:8,paddingLeft:12,borderLeft:"1px solid #e2e8f0"}}>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",lineHeight:1.2}}>
+                <span style={{fontSize:13,fontWeight:700,color:"#1e293b"}}>
+                  {session.username}
+                  {session.role === "admin" && (
+                    <span style={{marginLeft:6,background:"#fef3c7",color:"#92400e",padding:"1px 7px",borderRadius:10,fontSize:10,fontWeight:700,letterSpacing:".3px"}}>ADMIN</span>
+                  )}
+                </span>
+                {organization && (
+                  <span style={{fontSize:11,color:"#64748b",fontWeight:600}}>{organization.shortName || organization.name}</span>
+                )}
+              </div>
+              <button
+                onClick={onLogout}
+                title="Sign out"
+                style={{background:"#fff",color:"#475569",border:"1px solid #e2e8f0",borderRadius:8,padding:"6px 12px",fontSize:12.5,fontWeight:600,cursor:"pointer",fontFamily:font}}
+              >
+                Sign out
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
