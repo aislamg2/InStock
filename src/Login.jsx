@@ -123,10 +123,16 @@ const ui = {
   fieldGroup: { marginBottom: 14 },
 };
 
+// Organizations available on the signup form. The server is the source
+// of truth for which orgs are valid — this list just populates the
+// dropdown. (Future: GET /api/organizations.)
+const KNOWN_ORGS = [
+  { id: 'org_nd', name: 'University of Notre Dame', shortName: 'Notre Dame' },
+];
+
 export default function Login({ onAuthenticated }) {
   const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
-  const [orgs, setOrgs] = useState([]);
-  const [seeded, setSeeded] = useState(false);
+  const [orgs, setOrgs] = useState(KNOWN_ORGS);
 
   // Sign-in state
   const [siUsername, setSiUsername] = useState('');
@@ -147,10 +153,12 @@ export default function Login({ onAuthenticated }) {
   useEffect(() => {
     let active = true;
     (async () => {
+      // No-op in production (server seeds itself); seeds the test-mode
+      // localStorage shim during unit/integration tests.
       await ensureAdminSeeded();
       if (!active) return;
-      setOrgs(listOrganizations());
-      setSeeded(true);
+      const local = listOrganizations();
+      if (local && local.length > 0) setOrgs(local);
     })();
     return () => {
       active = false;
@@ -264,15 +272,6 @@ export default function Login({ onAuthenticated }) {
             <button type="submit" style={ui.btn(siLoading)} disabled={siLoading}>
               {siLoading ? 'Signing in…' : 'Sign in'}
             </button>
-
-            {seeded && (
-              <div style={ui.hint}>
-                <strong>First time?</strong> Default admin is{' '}
-                <code style={{ background: '#dcfce7', padding: '1px 5px', borderRadius: 4 }}>admin</code>
-                {' '}/{' '}
-                <code style={{ background: '#dcfce7', padding: '1px 5px', borderRadius: 4 }}>admin123</code>.
-              </div>
-            )}
           </form>
         )}
 

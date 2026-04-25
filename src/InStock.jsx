@@ -1,6 +1,15 @@
 import { useState, useRef, useEffect } from "react";
 import QRCode from "qrcode";
 import { Html5Qrcode } from "html5-qrcode";
+import { saveState as remoteSaveState } from "./stateService.js";
+
+const IS_TEST_MODE =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env &&
+    import.meta.env.MODE === "test") ||
+  (typeof process !== "undefined" &&
+    process.env &&
+    (process.env.NODE_ENV === "test" || process.env.VITEST === "true"));
 
 const uid = () => Math.random().toString(36).slice(2, 12);
 const ts  = () => new Date().toLocaleString();
@@ -289,8 +298,19 @@ const blankContact = { name:"", email:"", phone:"", slack:"" };
 const blankMfr     = { name:"", phone:"", email:"", website:"" };
 const blankMaintenance = { date:"", type:"Repair", description:"", technician:"", cost:"" };
 
-export default function InStock({ session, organization, onLogout } = {}) {
-  const [items,      setItems]      = useState(() => loadLS("instock_items", SEED));
+export default function InStock({
+  session,
+  organization,
+  onLogout,
+  initialState,
+  initialVersion = 0,
+  loadError,
+} = {}) {
+  const initial = initialState || {};
+  const pickInitial = (key, fallback) =>
+    initial[key] !== undefined ? initial[key] : loadLS(key, fallback);
+
+  const [items,      setItems]      = useState(() => pickInitial("instock_items", SEED));
   const [view,       setView]       = useState("list");  // list | detail | scan | logs
   const [toast,      setToast]      = useState(null);
   const [selected,   setSelected]   = useState(null);
@@ -298,29 +318,35 @@ export default function InStock({ session, organization, onLogout } = {}) {
   const [scanInput,  setScanInput]  = useState("");
   const scanRef = useRef();
 
+  // Server-side version token for optimistic concurrency on /api/state.
+  const versionRef = useRef(initialVersion || 0);
+  // Skip the very first save effect run (it would just push the data we
+  // just loaded back to the server).
+  const skipNextSaveRef = useRef(true);
+
   // ── categories / locations ──
-  const [categories,     setCategories]     = useState(() => loadLS("instock_categories", DEFAULT_CATEGORIES));
-  const [locations,      setLocations]      = useState(() => loadLS("instock_locations",  DEFAULT_LOCATIONS));
+  const [categories,     setCategories]     = useState(() => pickInitial("instock_categories", DEFAULT_CATEGORIES));
+  const [locations,      setLocations]      = useState(() => pickInitial("instock_locations",  DEFAULT_LOCATIONS));
   const [customCategory, setCustomCategory] = useState("");
   const [customLocation, setCustomLocation] = useState("");
   const [addingCategory, setAddingCategory] = useState(false);
   const [addingLocation, setAddingLocation] = useState(false);
 
   // ── contacts / manufacturers ──
-  const [contacts,      setContacts]      = useState(() => loadLS("instock_contacts", []));
+  const [contacts,      setContacts]      = useState(() => pickInitial("instock_contacts", []));
   const [addingContact, setAddingContact] = useState(false);
   const [newContact,    setNewContact]    = useState(blankContact);
 
-  const [manufacturers, setManufacturers] = useState(() => loadLS("instock_manufacturers", []));
+  const [manufacturers, setManufacturers] = useState(() => pickInitial("instock_manufacturers", []));
   const [addingMfr,     setAddingMfr]     = useState(false);
   const [newMfr,        setNewMfr]        = useState(blankMfr);
 
   // ── status change log ──
-  const [statusLogs, setStatusLogs] = useState(() => loadLS("instock_status_logs", []));
+  const [statusLogs, setStatusLogs] = useState(() => pickInitial("instock_status_logs", []));
   const [logSearch,  setLogSearch]  = useState("");
 
   // ── maintenance reports ──
-  const [maintenanceLogs, setMaintenanceLogs] = useState(() => loadLS("instock_maintenance_logs", []));
+  const [maintenanceLogs, setMaintenanceLogs] = useState(() => pickInitial("instock_maintenance_logs", []));
   const [showMaintForm,   setShowMaintForm]   = useState(false);
   const [maintForm,       setMaintForm]       = useState(blankMaintenance);
 
@@ -350,7 +376,7 @@ export default function InStock({ session, organization, onLogout } = {}) {
   const [formErrors, setFormErrors] = useState({});
   const [showForm,   setShowForm]   = useState(false);
 
-  // ── persist to localStorage ──
+  // ── persist to localStorage (local cache + test persistence) ──
   useEffect(() => { localStorage.setItem("instock_items",            JSON.stringify(items));            }, [items]);
   useEffect(() => { localStorage.setItem("instock_categories",       JSON.stringify(categories));       }, [categories]);
   useEffect(() => { localStorage.setItem("instock_locations",        JSON.stringify(locations));        }, [locations]);
@@ -358,6 +384,46 @@ export default function InStock({ session, organization, onLogout } = {}) {
   useEffect(() => { localStorage.setItem("instock_manufacturers",    JSON.stringify(manufacturers));    }, [manufacturers]);
   useEffect(() => { localStorage.setItem("instock_status_logs",      JSON.stringify(statusLogs));       }, [statusLogs]);
   useEffect(() => { localStorage.setItem("instock_maintenance_logs", JSON.stringify(maintenanceLogs)); }, [maintenanceLogs]);
+
+  // ── push changes to the shared server (debounced, prod only) ──
+  useEffect(() => {
+    if (IS_TEST_MODE) return;
+    // Don't push the initial-mount values we just hydrated from the server.
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+    const blob = {
+      instock_items:            items,
+      instock_categories:       categories,
+      instock_locations:        locations,
+      instock_contacts:         contacts,
+      instock_manufacturers:    manufacturers,
+      instock_status_logs:      statusLogs,
+      instock_maintenance_logs: maintenanceLogs,
+    };
+    const t = setTimeout(async () => {
+      try {
+        const r = await remoteSaveState(blob, versionRef.current);
+        if (r && typeof r.version === "number") versionRef.current = r.version;
+      } catch (err) {
+        if (err && err.code === 409 && err.current) {
+          // Another device updated since we last loaded — keep their version
+          // number so the next save attempt works. We don't auto-overwrite
+          // their data; the user can refresh to see it.
+          versionRef.current = err.current.version;
+          flash("Someone else updated the data — refresh to see latest.");
+        } else if (err && err.code === 401) {
+          flash("Session expired — please sign in again.");
+        } else {
+          // Network / server error: stay silent, the next change will retry.
+          // eslint-disable-next-line no-console
+          console.warn("InStock save failed:", err);
+        }
+      }
+    }, 800);
+    return () => clearTimeout(t);
+  }, [items, categories, locations, contacts, manufacturers, statusLogs, maintenanceLogs]);
 
   const flash = (m) => { setToast(m); setTimeout(()=>setToast(null),2800); };
   useEffect(()=>{ if(view==="scan" && scanRef.current) scanRef.current.focus(); },[view]);

@@ -77,7 +77,7 @@ describe('authService', () => {
 
     it('persists session via getSession', async () => {
       await login({ username: 'admin', password: 'admin123' });
-      const s = getSession();
+      const s = await getSession();
       expect(s).not.toBeNull();
       expect(s.username).toBe('admin');
     });
@@ -105,9 +105,9 @@ describe('authService', () => {
 
     it('logout clears the session', async () => {
       await login({ username: 'admin', password: 'admin123' });
-      expect(getSession()).not.toBeNull();
-      logout();
-      expect(getSession()).toBeNull();
+      expect(await getSession()).not.toBeNull();
+      await logout();
+      expect(await getSession()).toBeNull();
     });
   });
 
